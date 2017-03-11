@@ -1,4 +1,4 @@
-# Orderer Traffic Engine (OTE)
+# Orderer Traffic Engine (OTE) - NOTE: Work In Progress to incorporate certs...
 
 ## What does OTE do?
 
