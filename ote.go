@@ -420,21 +420,21 @@ func joinChannel(serverAddr string, clientName string, chIDStr string) {
     return
 
         logger(fmt.Sprintf("client=%s, cmd=%s", clientName, cmd))
-        _ = executeCmd(cmd)
+        _,_ = executeCmd(cmd)
         //executeCmdAndDisplay(cmd)
 }
 
-func executeCmd(cmd string) []byte {
+func executeCmd(cmd string) ([]byte, error) {
         out, err := exec.Command("/bin/sh", "-c", cmd).Output()
         if (err != nil) {
                 logger(fmt.Sprintf("Unsuccessful exec command: "+cmd+"\nstdout="+string(out)+"\nstderr=%v", err))
-                log.Fatal(err)
+                //log.Fatal(err)
         }
-        return out
+        return out, err
 }
 
 func executeCmdAndDisplay(cmd string) {
-        out := executeCmd(cmd)
+        out,_ := executeCmd(cmd)
         logger("Results of exec command: "+cmd+"\nstdout="+string(out))
 }
 
@@ -453,9 +453,9 @@ func cleanNetwork(consumerConnsP *([][]*grpc.ClientConn)) {
         connClose(&consumerConnsP)
 
         // Docker is not perfect; we need to unpause any paused containers, before removing them.
-        if out := executeCmd("docker ps -aq -f status=paused"); out != nil && string(out) != "" {
+        if out,_ := executeCmd("docker ps -aq -f status=paused"); out != nil && string(out) != "" {
                 logger("Unpausing paused docker containers: " + string(out))
-                _ = executeCmd("docker ps -aq -f status=paused | xargs docker unpause")
+                _,_ = executeCmd("docker ps -aq -f status=paused | xargs docker unpause")
         }
 
         // kill any containers that are still running
@@ -467,19 +467,19 @@ func cleanNetwork(consumerConnsP *([][]*grpc.ClientConn)) {
                 //logger("Sleep 60 secs, to allow checking docker logs orderer ..."); time.Sleep(60 * time.Second)
         }
         if debugflag1 { logger("Removing the Network orderers and associated docker containers") }
-        _ = executeCmd("docker rm -f $(docker ps -aq)")
+        _,_ = executeCmd("docker rm -f $(docker ps -aq)")
 }
 
 func launchNetwork(appendFlags string) {
         // Alternative way: hardcoded docker compose (not driver.sh tool)
         //  _ = executeCmd("docker-compose -f docker-compose-3orderers.yml up -d")
 
-        cmd := fmt.Sprintf("./driver.sh -a create -p 1 %s", appendFlags)
+        cmd := fmt.Sprintf("cd ../v1Launcher && ./NetworkLauncher.sh -z 2 -r 2 -p 2 -n 1 -f test -w 10.0.2.15 %s", appendFlags)
         logger(fmt.Sprintf("Launching network:  %s", cmd))
         if debugflagLaunch {
                 executeCmdAndDisplay(cmd) // show stdout logs; debugging help
         } else {
-                executeCmd(cmd)
+                _,_ = executeCmd(cmd)
         }
 
         // display the network of docker containers with the orderers and such
@@ -874,7 +874,8 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
         // Establish the default configuration from yaml files - and this also
         // picks up any variables overridden on command line or in environment
         ordConf = config.Load()
-        genConf = genesisconfig.Load(genesisconfig.SampleInsecureProfile)
+        //genConf = genesisconfig.Load(genesisconfig.SampleInsecureProfile)
+        genConf = genesisconfig.Load("testOrg")
         var launchAppendFlags string
 
         ////////////////////////////////////////////////////////////////////////
@@ -1012,7 +1013,7 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
 
         batchTimeout := int((genConf.Orderer.BatchTimeout).Seconds()) // Seconds() converts time.Duration to float64, and then retypecast to int
         envvar = os.Getenv(batchTimeoutParamStr)
-        if batchTimeout != 10 { launchAppendFlags += fmt.Sprintf(" -c %d", batchTimeout) }
+        //if batchTimeout != 10 { launchAppendFlags += fmt.Sprintf(" -c %d", batchTimeout) }
         if debugflagAPI { logger(fmt.Sprintf("%-50s %s=%d", batchTimeoutParamStr+"="+envvar, "batchTimeout", batchTimeout)) }
 
         // CoreLoggingLevel
@@ -1108,7 +1109,7 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
         // Due to those bugs, we cannot pass many tests using multiple orderers and multiple channels.
         // TEMPORARY PARTIAL SOLUTION: To test multiple orderers with a single channel,
         // use hardcoded TestChainID and skip creating any channels.
-    if numChannels == 1 {
+    if numChannels == 0 {
       channelIDs[0] = genesisconfigProvisional.TestChainID
       logger(fmt.Sprintf("Using DEFAULT channelID = %s", channelIDs[0]))
     } else {
@@ -1116,10 +1117,16 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
         // create all the channels using orderer0
         // CONFIGTX_ORDERER_ADDRESSES is the list of orderers. use the first one. Default is [127.0.0.1:7050]
         for c:=0; c < numChannels; c++ {
-                channelIDs[c] = fmt.Sprintf("testchan%03d", c)
+                channelIDs[c] = fmt.Sprintf("testChannel%d", c+1)
                 //cmd := fmt.Sprintf("cd $GOPATH/src/github.com/hyperledger/fabric && peer channel create -c %s", channelIDs[c])
-                cmd := fmt.Sprintf("cd $GOPATH/src/github.com/hyperledger/fabric && peer channel create -o 127.0.0.1:%d -c %s -f ./msp/sampleconfig/%s.tx", ordStartPort, channelIDs[c], channelIDs[c])
-                _ = executeCmd(cmd)
+                cmd := fmt.Sprintf("cd $GOPATH/src/github.com/hyperledger/fabric && CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/common/tools/cryptogen/crypto-config/ordererOrganizations/ordererOrg1/orderers/ordererOrg1Orderer1 CORE_PEER_LOCALMSPID=OrdererOrg1 peer channel create -o 10.0.2.15:%d -c testChannel1 -f $GOPATH/src/github.com/hyperledger/fabric/common/tools/cryptogen/crypto-config/ordererOrganizations/testChannel1.tx", ordStartPort)
+                _, err := executeCmd(cmd)
+                if err != nil {
+                       time.Sleep(5 * time.Second)
+                       cmd = fmt.Sprintf("cd $GOPATH/src/github.com/hyperledger/fabric && CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/common/tools/cryptogen/crypto-config/ordererOrganizations/ordererOrg1/orderers/ordererOrg1Orderer1 CORE_PEER_LOCALMSPID=OrdererOrg1 peer channel fetch -o 10.0.2.15:%d -c testChannel1 -f $GOPATH/src/github.com/hyperledger/fabric/common/tools/cryptogen/crypto-config/ordererOrganizations/testChannel1.tx", ordStartPort)
+                        _, err = executeCmd(cmd)
+                }
+
                 // executeCmdAndDisplay(cmd)
         }
 
@@ -1128,13 +1135,20 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
         // It should be successful if all certs are present and the peer's organization is part of the orderer-service genesis.block.
         // This ote tool does not verify anything in the peer automatically, but this
         // might be helpful in case someone wants to view: docker logs peer0
-        serverAddr := fmt.Sprintf("127.0.0.1:%d", ordStartPort)
-        for c:=0; c < numChannels; c++ {
-                joinChannel(serverAddr, "peer0", channelIDs[c])
-        }
+        //serverAddr := fmt.Sprintf("127.0.0.1:%d", ordStartPort)
+        //for c:=0; c < numChannels; c++ {
+        //        joinChannel(serverAddr, "peer0", channelIDs[c])
+        //}
 
     }
-
+    // executeCommand to run crypto for creating identity certs for all consumers which invoke Deliver as if they are peers
+    createConsumerCertsCmd := fmt.Sprintf("$GOPATH/src/github.com/hyperledger/fabric/common/tools/cryptogen/cryptogen -ordererNodes %d -peerOrgs 1 -peersPerOrg %d", numOrdsToWatch, numConsumers)
+    logger(fmt.Sprintf("Creating crypto for Consumers: %s", createConsumerCertsCmd))
+    if debugflagLaunch {
+        executeCmdAndDisplay(createConsumerCertsCmd) // show stdout logs; debugging help
+    } else {
+        executeCmd(createConsumerCertsCmd)
+    }
 
         ////////////////////////////////////////////////////////////////////////
         // Start threads for each consumer to watch each channel on all (the
@@ -1171,6 +1185,10 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
                         // Normal mode: create a unique consumer client
                         // go-thread for each channel on each orderer.
                         for c := 0 ; c < numChannels ; c++ {
+                                consumerIdx := ord*numOrdsToWatch + c
+                                genConf.Application.Organizations[0].ID = fmt.Sprintf("peer%d", consumerIdx)
+                                genConf.Application.Organizations[0].Name = genConf.Application.Organizations[0].ID
+                                genConf.Application.Organizations[0].MSPDir = fmt.Sprintf("crypto-config/peerOrganizations/peerOrg1/peers/peerOrg1Peer%d", consumerIdx+1)
                                 go startConsumer(serverAddr, channelIDs[c], ord, c, &(txRecv[ord][c]), &(blockRecv[ord][c]), &(consumerConns[ord][c]))
                         }
                 }
