@@ -318,6 +318,7 @@ func (b *broadcastClient) getAck() error {
 
 func startConsumer(serverAddr string, chanID string, ordererIndex int, channelIndex int, txRecvCntrP *int64, blockRecvCntrP *int64, consumerConnP **grpc.ClientConn) {
         myName := clientName("Consumer", ordererIndex, channelIndex)
+        joinChannel(serverAddr, myName, chanID)
         conn, err := grpc.Dial(serverAddr, grpc.WithInsecure())
         if err != nil {
                 panic(fmt.Sprintf("Error on client %s connecting (grpc) to %s, err: %v", myName, serverAddr, err))
@@ -327,8 +328,8 @@ func startConsumer(serverAddr string, chanID string, ordererIndex int, channelIn
         if err != nil {
                 panic(fmt.Sprintf("Error on client %s invoking Deliver() on grpc connection to %s, err: %v", myName, serverAddr, err))
         }
+        if debugflag1 { logger(fmt.Sprintf("ab.NewAtomicBroadcastClient client %s created to recv delivered batches srvr=%s chID=%s", myName, serverAddr, chanID)) }
         s := newOrdererdriveClient(client, chanID)
-        joinChannel(serverAddr, myName, chanID)
         if err = s.seekOldest(); err != nil {
                 panic(fmt.Sprintf("ERROR starting client %s srvr=%s chID=%s; err: %v", myName, serverAddr, chanID, err))
         }
@@ -349,12 +350,12 @@ func startConsumerMaster(serverAddr string, chanIdsP *[]string, ordererIndex int
         //[][]*ordererdriveClient  //  numChannels
         dc := make ([]*ordererdriveClient, numChannels)
         for c := 0; c < numChannels; c++ {
+                joinChannel(serverAddr, myName, (*chanIdsP)[c])
                 client, err := ab.NewAtomicBroadcastClient(*consumerConnP).Deliver(context.TODO())
                 if err != nil {
                         panic(fmt.Sprintf("Error on client %s invoking Deliver() on grpc connection to %s, err: %v", myName, serverAddr, err))
                 }
                 dc[c] = newOrdererdriveClient(client, (*chanIdsP)[c])
-                joinChannel(serverAddr, myName, (*chanIdsP)[c])
                 if err = dc[c].seekOldest(); err != nil {
                         panic(fmt.Sprintf("ERROR starting client %s srvr=%s chID=%s; err: %v", myName, serverAddr, (*chanIdsP)[c], err))
                 }
@@ -409,17 +410,25 @@ func clientName(clientType string, ordIdx int, chIdx int) string {
 func joinChannel(serverAddr string, clientName string, chIDStr string) {
 
         cmd := fmt.Sprintf("cd $GOPATH/src/github.com/hyperledger/fabric && ")
-        cmd += fmt.Sprintf(" CORE_PEER_ADDRESS=127.0.0.1:%d", peerStartPort)
-        cmd += fmt.Sprintf(" CORE_PEER_MSPCONFIGPATH=chaincode_sample/crypto/peer/peer0/localMspConfig")
-        cmd += fmt.Sprintf(" CORE_PEER_LOCALMSPID=peerOrg0")
-        cmd += fmt.Sprintf(" peer channel join -b %s.block", chIDStr)
+        // Which port should OTE test process threads use?
+        //cmd += fmt.Sprintf(" CORE_PEER_ADDRESS=10.0.2.15:%d", peerStartPort)
+        // e2e baked certs path:
+        // cmd += fmt.Sprintf(" CORE_PEER_MSPCONFIGPATH=chaincode_sample/crypto/peer/peer0/localMspConfig")
+        cmd += fmt.Sprintf(" CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/common/tools/cryptogen/crypto-config/peerOrganizations/peerOrg1/peers/peerOrg1Peer1")
+        cmd += fmt.Sprintf(" CORE_PEER_LOCALMSPID=PeerOrg1")
+        // e2e channel creation block has extension .block but v1Launcher uses extension .tx
+        // cmd += fmt.Sprintf(" peer channel join -b %s.block", chIDStr)
+
+        //cmd += fmt.Sprintf(" peer channel join -b %s.tx", chIDStr)
+        cmd += fmt.Sprintf(" peer channel join -b testChannel1.tx", chIDStr)
+
+        logger(fmt.Sprintf("client=%s, cmd=%s", clientName, cmd))
 
     // WIP: TODO: remove this early-exit-code once joinChannel is stabilized and working...
     // skip, while under construction...
-    if debugflag1 { logger(fmt.Sprintf("SKIP        client=%s, cmd=%s", clientName, cmd)) }
+    if debugflag1 { logger(fmt.Sprintf("SKIP joinChannel for now")) }
     return
 
-        logger(fmt.Sprintf("client=%s, cmd=%s", clientName, cmd))
         _,_ = executeCmd(cmd)
         //executeCmdAndDisplay(cmd)
 }
@@ -522,6 +531,7 @@ func moreDeliveries(txSentP *[][]int64, totalNumTxSentP *int64, txSentFailuresP 
 
 func startProducer(serverAddr string, chanID string, ordererIndex int, channelIndex int, txReq int64, txSentCntrP *int64, txSentFailureCntrP *int64) {
         myName := clientName("Producer", ordererIndex, channelIndex)
+        joinChannel(serverAddr, myName, chanID)
         conn, err := grpc.Dial(serverAddr, grpc.WithInsecure())
         defer func() {
           _ = conn.Close()
@@ -537,7 +547,6 @@ func startProducer(serverAddr string, chanID string, ordererIndex int, channelIn
         time.Sleep(3 * time.Second)
         if debugflag1 { logger(fmt.Sprintf("Starting Producer to send %d TXs to ord[%d] ch[%d] srvr=%s chID=%s, %v", txReq, ordererIndex, channelIndex, serverAddr, chanID, time.Now())) }
         b := newBroadcastClient(client, chanID)
-        joinChannel(serverAddr, myName, chanID)
         time.Sleep(2 * time.Second)
 
         // print a log after sending mulitples of this percentage of requested TX: 25,50,75%...
@@ -633,8 +642,8 @@ func startProducerMaster(serverAddr string, chanIdsP *[]string, ordererIndex int
         // create the broadcast clients for every channel on this orderer
         bc := make ([]*broadcastClient, numChannels)
         for c := 0; c < numChannels; c++ {
-                bc[c] = newBroadcastClient(client, (*chanIdsP)[c])
                 joinChannel(serverAddr, myName, (*chanIdsP)[c])
+                bc[c] = newBroadcastClient(client, (*chanIdsP)[c])
         }
 
         firstErr := false
@@ -874,8 +883,7 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
         // Establish the default configuration from yaml files - and this also
         // picks up any variables overridden on command line or in environment
         ordConf = config.Load()
-        //genConf = genesisconfig.Load(genesisconfig.SampleInsecureProfile)
-        genConf = genesisconfig.Load("testOrg")
+        genConf = genesisconfig.Load(genesisconfig.SampleInsecureProfile)
         var launchAppendFlags string
 
         ////////////////////////////////////////////////////////////////////////
@@ -1097,6 +1105,10 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
         launchNetwork(launchAppendFlags)
         time.Sleep(12 * time.Second)
 
+        // read the new config data in the new config.yaml generated by Network Launcher tool
+        ordConf = config.Load()
+        genConf = genesisconfig.Load("testOrg")
+
         ////////////////////////////////////////////////////////////////////////
         // Create the 1D slice of channel IDs, and create names for them
         // which we will use when producing/broadcasting/sending msgs and
@@ -1141,14 +1153,14 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
         //}
 
     }
-    // executeCommand to run crypto for creating identity certs for all consumers which invoke Deliver as if they are peers
-    createConsumerCertsCmd := fmt.Sprintf("$GOPATH/src/github.com/hyperledger/fabric/common/tools/cryptogen/cryptogen -ordererNodes %d -peerOrgs 1 -peersPerOrg %d", numOrdsToWatch, numConsumers)
-    logger(fmt.Sprintf("Creating crypto for Consumers: %s", createConsumerCertsCmd))
-    if debugflagLaunch {
-        executeCmdAndDisplay(createConsumerCertsCmd) // show stdout logs; debugging help
-    } else {
-        executeCmd(createConsumerCertsCmd)
-    }
+    //// executeCommand to run crypto for creating identity certs for all consumers which invoke Deliver as if they are peers
+    //createConsumerCertsCmd := fmt.Sprintf("$GOPATH/src/github.com/hyperledger/fabric/common/tools/cryptogen/cryptogen -ordererNodes %d -peerOrgs 1 -peersPerOrg %d", numOrdsToWatch, numConsumers)
+    //logger(fmt.Sprintf("Creating crypto for Consumers: %s", createConsumerCertsCmd))
+    //if debugflagLaunch {
+    //    executeCmdAndDisplay(createConsumerCertsCmd) // show stdout logs; debugging help
+    //} else {
+    //    executeCmd(createConsumerCertsCmd)
+    //}
 
         ////////////////////////////////////////////////////////////////////////
         // Start threads for each consumer to watch each channel on all (the
@@ -1185,10 +1197,6 @@ func ote( testname string, txs int64, chans int, orderers int, ordType string, k
                         // Normal mode: create a unique consumer client
                         // go-thread for each channel on each orderer.
                         for c := 0 ; c < numChannels ; c++ {
-                                consumerIdx := ord*numOrdsToWatch + c
-                                genConf.Application.Organizations[0].ID = fmt.Sprintf("peer%d", consumerIdx)
-                                genConf.Application.Organizations[0].Name = genConf.Application.Organizations[0].ID
-                                genConf.Application.Organizations[0].MSPDir = fmt.Sprintf("crypto-config/peerOrganizations/peerOrg1/peers/peerOrg1Peer%d", consumerIdx+1)
                                 go startConsumer(serverAddr, channelIDs[c], ord, c, &(txRecv[ord][c]), &(blockRecv[ord][c]), &(consumerConns[ord][c]))
                         }
                 }
